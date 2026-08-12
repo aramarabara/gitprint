@@ -65,6 +65,10 @@ jobs:
           python -m pip install -e ".[test]"
         shell: bash
 
+      - name: Regenerate git fixture (duo is gitignored)
+        run: bash tests/make_fixture.sh
+        shell: bash
+
       - name: Smoke — CLI entrypoint
         run: |
           gitprint --help 2>&1 | head -20 || true
