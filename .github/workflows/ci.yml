@@ -1,0 +1,126 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: unit (${{ matrix.os }} / py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install (no heavy deps)
+        run: |
+          pip install --upgrade pip
+          pip install -e . --no-deps
+          pip install numpy pytest
+        shell: bash
+
+      - name: Regenerate git fixture (duo is gitignored)
+        run: bash tests/make_fixture.sh
+        shell: bash
+
+      - name: Run tests
+        run: python -m pytest -q
+        shell: bash
+
+  install:
+    name: install (py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.11"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install full package (with sentence-transformers)
+        run: |
+          pip install --upgrade pip
+          pip install -e ".[test]"
+        shell: bash
+
+      - name: Smoke — CLI entrypoint
+        run: |
+          gitprint --help 2>&1 | head -20 || true
+          python -c "import gitprint; print('gitprint', gitprint.__version__)"
+        shell: bash
+
+      - name: Run tests
+        run: python -m pytest -q
+        shell: bash
+
+  backend-smoke:
+    name: backend (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            backend: llama
+            install: "llama-cpp-python"
+          - os: macos-latest
+            backend: mlx
+            install: "mlx-lm"
+          - os: windows-latest
+            backend: llama
+            install: "llama-cpp-python"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package + backend dep
+        run: |
+          pip install --upgrade pip
+          pip install -e . --no-deps numpy
+          pip install "${{ matrix.install }}"
+        shell: bash
+
+      - name: Verify backend resolves & imports
+        run: |
+          python - <<'PY'
+          import platform
+          from gitprint.backend import resolve_backend_kind
+          resolved = resolve_backend_kind("auto", platform.system(), platform.machine())
+          expected = "${{ matrix.backend }}"
+          assert resolved == expected, f"auto resolved to {resolved}, expected {expected}"
+          print(f"OK: auto -> {resolved} on {platform.system()}/{platform.machine()}")
+
+          if resolved == "mlx":
+              from mlx_lm import load
+              print("OK: mlx_lm importable")
+          else:
+              from llama_cpp import Llama
+              print("OK: llama_cpp importable")
+          PY
+        shell: bash
